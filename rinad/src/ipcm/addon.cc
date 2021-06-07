@@ -30,6 +30,7 @@
 #include "addons/mobility-manager.h"
 #include "addons/scripting.h"
 #include "addons/ma/agent.h"
+#include "addons/ipcm-api.h"
 //[+] Add more here...
 
 namespace rinad {
@@ -55,6 +56,8 @@ void Addon::factory(rinad::RINAConfiguration& conf, const std::string& name){
 			addon = new ScriptingEngine();
 		}else if(name == MobilityManager::NAME){
 			addon = new MobilityManager(conf);
+        }else if(name == IPCMApi::NAME){
+            addon = new IPCMApi(conf.local.grpcSocket);
 		}else{
 			//TODO add other types
 			LOG_EMERG("Uknown addon name '%s'. Ignoring...", name.c_str());

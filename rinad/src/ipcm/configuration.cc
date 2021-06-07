@@ -174,6 +174,12 @@ void parse_local_conf(const Json::Value &         root,
 		local.consoleSocket = DEFAULT_RUNDIR "/ipcm-console.sock";
 	}
 
+	local.grpcSocket = local_conf.get("grpcSocket",
+					   local.grpcSocket).asString();
+    if (local.grpcSocket.empty()) {
+        local.grpcSocket = DEFAULT_RUNDIR "/ipcm-grpc.sock";
+    }
+
 	local.installationPath = local_conf.get("installationPath",
 				 local.installationPath).asString();
 	if (local.installationPath.empty()) {

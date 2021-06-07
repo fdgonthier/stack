@@ -285,6 +285,8 @@ public:
 	//
 	void list_ipcps(std::ostream& os);
 
+    void list_ipcps(std::list<IPCPDescription>& ipcpDesc);
+
 	//
 	// List the DIF Allocator mappings
 	//

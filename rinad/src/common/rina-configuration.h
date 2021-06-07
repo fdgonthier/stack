@@ -152,6 +152,12 @@ struct IPCProcessToCreate {
 struct LocalConfiguration {
 
         /*
+         * The unix socket where the IPC Manager is listening for GRPC
+         * connections.
+         */
+        std::string grpcSocket;
+
+        /*
          * The unix socket where the IPC Manager is listening for incoming
          * connections from administrators
          */

@@ -41,6 +41,40 @@ namespace rinad {
 //fwd decl
 class IPCMIPCProcessFactory;
 
+// Textual description of an IPCP process. This exposes that so that
+// user interfaces can display IPC process information.
+class IPCPDescription {
+    friend class IPCMIPCProcess;
+
+    public:
+    const int get_id() const {
+        return this->id;
+    }
+
+    const std::string& get_name() const {
+        return this->name;
+    }
+
+    const std::string& get_type() const {
+        return this->type;
+    }
+
+    const std::list<std::string>& get_apps() const {
+        return this->apps;
+    }
+
+    const std::list<int>& get_flows() const {
+        return this->flows;
+    }
+
+    private:
+    int id;               // ID of the process
+    std::string name;     // Name of the IPC process
+    std::string type;     // Type of IPC process
+    std::list<std::string> apps;  // Registered applications
+    std::list<int> flows; // Flows ID
+};
+
 /**
  * Encapsulates the state and operations that can be performed over
  * a single IPC Process (besides creation/destruction)
@@ -113,7 +147,7 @@ public:
 
 	std::list<rina::ApplicationProcessNamingInformation> get_neighbors_with_n1dif(const rina::ApplicationProcessNamingInformation& dif_name);
 
-	void get_description(std::ostream& os);
+	void get_description(IPCPDescription &desc);
 
 	/**
 	 * Invoked by the IPC Manager to set the IPC Process as initialized.

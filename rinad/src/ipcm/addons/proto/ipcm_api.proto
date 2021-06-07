@@ -1,0 +1,113 @@
+// Copyright 2015 gRPC authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+option go_package = "github.com/IRATI/ipcm_api";
+
+package ipcm_api;
+
+// The greeting service definition.
+service IPCM {
+   rpc ListIpcps (ListIpcpsReq) returns (ListIpcpsRes);
+   rpc GetIfaceForDif (GetIfaceForDifReq) returns (GetIfaceForDifRes);
+   rpc QueryRib (QueryRibReq) returns (QueryRibRes);
+   rpc CreateIpcp (CreateIpcpReq) returns (CreateIpcpRes);
+   rpc DestroyIpcp (DestroyIpcpReq) returns (DestroyIpcpRes);
+   rpc EnrollToDif (EnrollToDifReq) returns (EnrollToDifRes);
+   rpc AssignToDif (AssignToDifReq) returns (AssignToDifRes);
+}
+
+// IPCP info for list-ipcps
+message IPCP {
+  int32 id = 1;
+  string name = 2;
+  string type = 3;
+  repeated string apps = 4;
+  repeated int32 flows = 5;
+}
+
+// list-ipcps
+
+message ListIpcpsReq {}
+
+message ListIpcpsRes {
+   repeated IPCP ipcp = 1;
+}
+
+// get-iface-for-dif
+
+message GetIfaceForDifReq {
+   string dif = 1;
+}
+
+message GetIfaceForDifRes {
+    string iface = 1;
+}
+
+// query-rib
+
+message QueryRibReq {
+    int32 ipcp_id = 1;
+    string object_class = 2;
+    string object_name = 3;
+}
+
+message QueryRibRes {
+    string serializedRib = 1;        
+}
+
+// create-ipcp
+
+message CreateIpcpReq {
+    string ipcp_type = 1;
+    string dif_name = 2;
+}
+
+message CreateIpcpRes {
+    int32 ipcp_id = 1;
+    string name = 2;
+}
+
+// destroy-ipcp
+
+message DestroyIpcpReq {
+    int32 ipcp_id = 1;
+}
+
+message DestroyIpcpRes {}
+
+// enroll-to-dif
+
+message EnrollToDifReq {
+    int32 ipcp_id = 1;
+    string dif_name = 2;
+    string supporting_dif_name = 3;
+    string neighbor_process_name = 4;
+    string neighbor_process_inst = 5;
+}
+
+message EnrollToDifRes {
+    int32 ms_delay = 1;
+}
+
+// assign-to-dif
+
+message AssignToDifReq {
+    int32 ipcp_id = 1;
+    string dif_name = 2;
+    string dif_template = 3;
+}
+
+message AssignToDifRes {}
+

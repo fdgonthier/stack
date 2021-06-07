@@ -375,7 +375,37 @@ void IPCManager_::list_ipcps(std::ostream& os)
             << std::endl;
     for (unsigned int i = 0; i < ipcps.size(); i++)
     {
-        ipcps[i]->get_description(os);
+        IPCPDescription desc;
+        ipcps[i]->get_description(desc);
+
+        os << desc.get_id() << " | "
+           << desc.get_name() << " | "
+           << desc.get_type() << " | ";
+
+        if (desc.get_apps().size() > 0) {
+            std::list<std::string>::const_iterator it;
+
+            for (it = desc.get_apps().begin(); it != desc.get_apps().end(); ++it) {
+                if (it != desc.get_apps().begin())
+                    os << ", ";
+                os << (*it);
+            }
+        }
+        else os << " - ";
+
+        if (desc.get_flows().size() > 0) {
+            std::list<int>::const_iterator it;
+
+            for (it = desc.get_flows().begin(); it != desc.get_flows().end(); ++it) {
+                if (it != desc.get_flows().begin())
+                    os <<
+                        ", ";
+                os << (*it);
+            }
+        }
+        else os << " - ";
+
+        os << std::endl;
     }
 }
 
@@ -420,6 +450,22 @@ std::string IPCManager_::get_ipcp_name(int ipcp_id)
     return ipcp->get_name().processName;
 }
 
+void IPCManager_::list_ipcps(std::list<IPCPDescription>& ipcpDescs){
+    rina::ReadScopedLock readlock(ipcp_factory_.rwlock);
+
+    //Call the factory
+    std::vector<IPCMIPCProcess*> ipcps;
+    ipcp_factory_.listIPCProcesses(ipcps);
+
+    //Compose the list
+    for (auto it = ipcps.begin(); it != ipcps.end(); ++it) {
+        IPCPDescription desc;
+
+        (*it)->get_description(desc);
+        ipcpDescs.push_back(desc);
+    }
+}
+
 void IPCManager_::list_ipcps(std::list<int>& list)
 {
     //Prevent any insertion/deletion to happen
@@ -430,8 +476,7 @@ void IPCManager_::list_ipcps(std::list<int>& list)
     ipcp_factory_.listIPCProcesses(ipcps);
 
     //Compose the list
-    std::vector<IPCMIPCProcess*>::const_iterator it;
-    for (it = ipcps.begin(); it != ipcps.end(); ++it)
+    for (auto it = ipcps.begin(); it != ipcps.end(); ++it)
         list.push_back((*it)->get_id());
 }
 

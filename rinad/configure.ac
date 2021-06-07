@@ -138,6 +138,16 @@ PKG_CHECK_MODULES(LIBPROTOBUF, [protobuf >= $LIBPROTOBUF_MIN_VERSION],, [
     AC_MSG_ERROR([Your system lacks of libprotobuf support (>= $LIBPROTOBUF_MIN_VERSION)])
 ])
 
+LIBGRPCPP_MIN_VERSION=1.3.2
+PKG_CHECK_MODULES(LIBGRPCPP, [grpc++ >= $LIBGRPCPP_MIN_VERSION],, [
+    AC_MSG_ERROR([Your system lacks of libgrpc++ support (>= $LIBGRPCPP_MIN_VERSION)])
+])
+
+AC_PATH_PROG([GRPC_CPP_PLUGIN], [grpc_cpp_plugin], [no])
+AS_IF([test "x$GRPC_CPP_PLUGIN" = "xno"], [
+    AC_MSG_ERROR([Your system lacks GRPC C++ support])
+])
+
 AC_PATH_PROG([PERL], [perl], [no])
 AM_CONDITIONAL([HAVE_PERL], [ test "$PERL" != "no" ])
 
@@ -210,6 +220,7 @@ AC_CONFIG_FILES([
     src/ipcp/plugins/nsm-address-change/Makefile
     src/ipcm/Makefile
     src/ipcm/addons/Makefile
+    src/ipcm/addons/proto/Makefile
     src/ipcm/addons/ma/Makefile
     src/ipcm/addons/ma/ribs/Makefile
     src/ipcm/include/Makefile

@@ -101,9 +101,9 @@ int wrapped_main(int argc, char * argv[])
 		TCLAP::ValueArg<std::string>
 			addons_arg("a",
 				 "addons",
-				 "Load listed addons; default \"console, scripting\"",
+				 "Load listed addons; default \"console, scripting, grpc\"",
 				 false,
-				 "console, scripting",
+				 "console, scripting, grpc",
 				 "string");
 
 		TCLAP::ValueArg<std::string>

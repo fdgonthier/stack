@@ -124,57 +124,47 @@ IPCMIPCProcess::get_neighbors_with_n1dif(const rina::ApplicationProcessNamingInf
 	return result;
 }
 
-void IPCMIPCProcess::get_description(std::ostream& os) {
-	os << "    " << get_id() << " | " <<
-				get_name().toString() << " | " <<
-				get_type() << " | ";
-	rina::ReadScopedLock readlock(rwlock);
-	switch (state_) {
-	case IPCM_IPCP_CREATED:
-		os << "CREATED";
-		break;
-	case IPCM_IPCP_INITIALIZED:
-		os << "INITIALIZED";
-		break;
-	case IPCM_IPCP_ASSIGN_TO_DIF_IN_PROGRESS:
-		os << "ASSIGN TO DIF IN PROGRESS";
-		break;
-	case IPCM_IPCP_ASSIGNED_TO_DIF:
-		os << "ASSIGNED TO DIF " << dif_name_.processName;
-		break;
-	default:
-		os << "UNKNOWN STATE";
-	}
+void IPCMIPCProcess::get_description(IPCPDescription &desc) {
+    rina::ReadScopedLock readlock(rwlock);
 
-	os << " | ";
-	if (registeredApplications.size() > 0) {
-		std::list<rina::ApplicationRegistrationInformation>::const_iterator it;
-		for (it = registeredApplications.begin();
-				it != registeredApplications.end(); ++it) {
-			if (it != registeredApplications.begin()) {
-				os << ", ";
-			}
-			os << it->appName.getEncodedString();
-		}
-	} else {
-		os << "-";
-	}
+    desc.id = get_id();
+    desc.name = get_name().toString();
 
-	os << " | ";
-	if (allocatedFlows.size () > 0) {
-		std::list<rina::FlowInformation>::const_iterator it;
-		for (it = allocatedFlows.begin();
-				it != allocatedFlows.end(); ++it) {
-			if (it != allocatedFlows.begin()) {
-				os << ", ";
-			}
-			os << it->portId;
-		}
-	} else {
-		os << "-";
-	}
+    switch (state_) {
+    case IPCM_IPCP_CREATED:
+        desc.type = "CREATED";
+        break;
+    case IPCM_IPCP_INITIALIZED:
+        desc.type = "INITIALIZED";
+        break;
+    case IPCM_IPCP_ASSIGN_TO_DIF_IN_PROGRESS:
+        desc.type = "ASSIGN TO DIF IN PROGRESS";
+        break;
+    case IPCM_IPCP_ASSIGNED_TO_DIF: {
+        std::stringstream s;
+        s << "ASSIGNED TO DIF " << dif_name_.processName;
+        desc.type = s.str();
+        break;
+    }
+    default:
+        desc.type = "UNKNOWN STATE";
+    }
 
-	os << "\n";
+    if (registeredApplications.size() > 0) {
+        std::list<rina::ApplicationRegistrationInformation>::const_iterator it;
+        for (it = registeredApplications.begin(); it != registeredApplications.end(); ++it) {
+            if (it != registeredApplications.begin())
+                desc.apps.push_back(it->appName.getEncodedString());
+        }
+    }
+
+    if (allocatedFlows.size () > 0) {
+        std::list<rina::FlowInformation>::const_iterator it;
+        for (it = allocatedFlows.begin(); it != allocatedFlows.end(); ++it) {
+            if (it != allocatedFlows.begin())
+                desc.flows.push_back(it->portId);
+        }
+    }
 }
 
 void IPCMIPCProcess::setInitialized()
