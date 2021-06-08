@@ -4,7 +4,7 @@
 # Written by: Eduard Grasa <eduard DOT grasa AT i2cat DOT net>
 #
 
-CLEANFILES       =
+CLEANFILES       = *.pb.h *.pb.cc
 MOSTLYCLEANFILES =
 EXTRA_DIST       =
 bin_PROGRAMS                       =

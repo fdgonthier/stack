@@ -17,6 +17,8 @@ rina_gw_SOURCES = rina-gw.cpp fdfwd.cpp
 rina_gw_LDADD = $(LIBRINA_API_LIBS)
 rina_gw_CPPFLAGS = $(LIBRINA_API_CFLAGS) -std=c++11
 
+CLEANFILES = *.pb.h *.pb.cc *.stamp
+
 MOSTLYCLEANFILES =
 EXTRA_DIST =
 include $(srcdir)/Makefile.inc
@@ -29,12 +31,15 @@ BUILT_SOURCES = $(protoSOURCES)
 libiporina_la_SOURCES =			\
 	$(protoSOURCES)				\
 libiporina_la_CPPFLAGS =			\
+	-I$(LIBPROTOBUF_CFLAGS)	    \
 	-I$(builddir)/..			\
 	-I$(srcdir)/..
 
 iporinad_SOURCES = iporinad.cpp fdfwd.cpp cdap.cpp
 iporinad_LDADD = $(LIBRINA_API_LIBS) libiporina.la
-iporinad_CPPFLAGS = $(LIBRINA_API_CFLAGS) -std=c++11
+iporinad_CPPFLAGS = $(LIBPROTOBUF_CFLAGS) $(LIBRINA_API_CFLAGS) -std=c++11
 
 bin_PROGRAMS += rinaperf rina-echo-async rina-gw iporinad
 AM_INSTALLCHECK_STD_OPTIONS_EXEMPT += rinaperf rina-echo-async rina-gw iporinad
+
+AM_CPPFLAGS = $(LIBPROTOBUF_CFLAGS)
