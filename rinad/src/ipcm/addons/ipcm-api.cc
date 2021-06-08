@@ -243,10 +243,8 @@ void IPCMApi::server_loop() {
     while(true) {
         int client_fd = accept(server_fd, (struct sockaddr *)&addr_remote, (socklen_t*)&addr_remote_size);
 
-        if (client_fd < 0) {
-            std::cout << errno << std::end
+        if (client_fd < 0)
             throw std::runtime_error("error accepting on uds");
-        }
 
         /* Make the socket non-blocking. */
         int flags = fcntl(client_fd, F_GETFL, 0);
@@ -335,7 +333,7 @@ IPCMApi::IPCMApi(const std::string& socket_path_)
 {
     if (init()) {
         // Start the service in a new thread.
-        worker = new rina::Thread(service_fYunction, this, std::string("grpc-api"), false);
+        worker = new rina::Thread(service_function, this, std::string("grpc-api"), false);
         worker->start();
     }
     else LOG_ERR("Failed initialization of GRPC API server.");
