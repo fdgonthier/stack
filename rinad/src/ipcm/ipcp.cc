@@ -129,41 +129,38 @@ void IPCMIPCProcess::get_description(IPCPDescription &desc) {
 
     desc.id = get_id();
     desc.name = get_name().toString();
+    desc.type = get_type();
 
     switch (state_) {
     case IPCM_IPCP_CREATED:
-        desc.type = "CREATED";
+        desc.state = "CREATED";
         break;
     case IPCM_IPCP_INITIALIZED:
-        desc.type = "INITIALIZED";
+        desc.state = "INITIALIZED";
         break;
     case IPCM_IPCP_ASSIGN_TO_DIF_IN_PROGRESS:
-        desc.type = "ASSIGN TO DIF IN PROGRESS";
+        desc.state = "ASSIGN TO DIF IN PROGRESS";
         break;
     case IPCM_IPCP_ASSIGNED_TO_DIF: {
         std::stringstream s;
         s << "ASSIGNED TO DIF " << dif_name_.processName;
-        desc.type = s.str();
+        desc.state = s.str();
         break;
     }
     default:
-        desc.type = "UNKNOWN STATE";
+        desc.state = "UNKNOWN STATE";
     }
 
     if (registeredApplications.size() > 0) {
         std::list<rina::ApplicationRegistrationInformation>::const_iterator it;
-        for (it = registeredApplications.begin(); it != registeredApplications.end(); ++it) {
-            if (it != registeredApplications.begin())
-                desc.apps.push_back(it->appName.getEncodedString());
-        }
+        for (it = registeredApplications.begin(); it != registeredApplications.end(); ++it)
+            desc.apps.push_back(it->appName.getEncodedString());
     }
 
     if (allocatedFlows.size () > 0) {
         std::list<rina::FlowInformation>::const_iterator it;
-        for (it = allocatedFlows.begin(); it != allocatedFlows.end(); ++it) {
-            if (it != allocatedFlows.begin())
-                desc.flows.push_back(it->portId);
-        }
+        for (it = allocatedFlows.begin(); it != allocatedFlows.end(); ++it)
+            desc.flows.push_back(it->portId);
     }
 }
 

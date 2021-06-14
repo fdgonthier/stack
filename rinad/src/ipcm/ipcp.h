@@ -55,6 +55,10 @@ class IPCPDescription {
         return this->name;
     }
 
+    const std::string& get_state() const {
+        return this->state;
+    }
+
     const std::string& get_type() const {
         return this->type;
     }
@@ -71,6 +75,7 @@ class IPCPDescription {
     int id;               // ID of the process
     std::string name;     // Name of the IPC process
     std::string type;     // Type of IPC process
+    std::string state;    // State of IPC process registration
     std::list<std::string> apps;  // Registered applications
     std::list<int> flows; // Flows ID
 };

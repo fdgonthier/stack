@@ -380,7 +380,8 @@ void IPCManager_::list_ipcps(std::ostream& os)
 
         os << desc.get_id() << " | "
            << desc.get_name() << " | "
-           << desc.get_type() << " | ";
+           << desc.get_type() << " | "
+           << desc.get_state() << " | ";
 
         if (desc.get_apps().size() > 0) {
             std::list<std::string>::const_iterator it;
@@ -392,6 +393,8 @@ void IPCManager_::list_ipcps(std::ostream& os)
             }
         }
         else os << " - ";
+
+        os << "|";
 
         if (desc.get_flows().size() > 0) {
             std::list<int>::const_iterator it;
