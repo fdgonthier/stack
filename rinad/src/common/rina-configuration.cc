@@ -98,6 +98,7 @@ string LocalConfiguration::toString() const
         ss << "\tLog path: " << logPath << endl;
         ss << "\tConsole socket: " << consoleSocket << endl;
         ss << "\tGRPC socket: " << grpcSocket << endl;
+        ss << "\tSystem Name: " << system_name.toString() << endl;
 
 	ss << "\tPlugins paths:" <<endl;
 	for (list<string>::const_iterator lit = pluginsPaths.begin();
