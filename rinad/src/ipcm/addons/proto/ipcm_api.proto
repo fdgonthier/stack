@@ -37,6 +37,14 @@ message IPCP {
   repeated int32 flows = 5;
 }
 
+// Query RIB object
+message RIBObject {
+    string name = 1;
+    string class = 2;
+    string instance = 3;
+    string displayable_value = 4;
+}
+
 // list-ipcps
 
 message ListIpcpsReq {}
@@ -64,7 +72,7 @@ message QueryRibReq {
 }
 
 message QueryRibRes {
-    string serializedRib = 1;        
+    repeated RIBObject rib_object = 1;
 }
 
 // create-ipcp

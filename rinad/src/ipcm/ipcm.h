@@ -132,12 +132,22 @@ public:
 };
 
 //
+// Data item for RIB Query
+//
+struct QueryRIBObject {
+    std::string name;
+    std::string clazz;
+    std::string instance;
+    std::string displayable_value;
+};
+
+//
 // Query RIB promise
 //
 class QueryRIBPromise : public Promise {
 
 public:
-	std::string serialized_rib;
+    std::vector<struct QueryRIBObject> rib_objects;
 };
 
 //

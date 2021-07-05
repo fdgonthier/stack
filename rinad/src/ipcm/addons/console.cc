@@ -193,6 +193,7 @@ public:
 		int ipcp_id;
 		QueryRIBPromise promise;
 		string objectClass, objectName;
+        vector<struct QueryRIBObject>::iterator it;
 
 		if (args.size() < 2) {
 			console->outstream << console->commands_map[args[0]]->usage << endl;
@@ -223,7 +224,16 @@ public:
 			return rina::UNIXConsole::CMDRETCONT;
 		}
 
-		console->outstream << promise.serialized_rib << endl;
+        for (it = promise.rib_objects.begin(); it != promise.rib_objects.end(); ++it) {
+            console->outstream
+                << "Name: " << it->name <<
+                "; Class: "<< it->clazz;
+            console->outstream
+                << "; Instance: "<< it->instance << endl;
+            console->outstream
+                << "Value: " << it->displayable_value <<endl;
+            console->outstream << "" << endl;
+        }
 
 		return rina::UNIXConsole::CMDRETCONT;
 	}

@@ -89,6 +89,7 @@ grpc::Status IPCMApiService::QueryRib(grpc::ServerContext* ctx,
     QueryRIBPromise promise;
     std::string object_class, object_name;
     std::ostringstream err;
+    std::vector<struct QueryRIBObject>::iterator it;
     int ipcp_id;
 
     ipcp_id = req->ipcp_id();
@@ -104,7 +105,15 @@ grpc::Status IPCMApiService::QueryRib(grpc::ServerContext* ctx,
         promise.wait() != IPCM_SUCCESS)
         return grpc::Status(grpc::StatusCode::INTERNAL, "Query RIB operation failed");
 
-    res->set_serializedrib(promise.serialized_rib);
+    for (it = promise.rib_objects.begin(); it != promise.rib_objects.end(); ++it) {
+        ipcm_api::RIBObject *ro;
+
+        ro = res->add_rib_object();
+        ro->set_name((*it).name);
+        ro->set_class_((*it).clazz);
+        ro->set_instance((*it).instance);
+        ro->set_displayable_value((*it).displayable_value);
+    }
 
     return grpc::Status::OK;
 }

@@ -83,17 +83,20 @@ void IPCManager_::query_rib_response_event_handler(rina::QueryRIBResponseEvent *
 		<< "process " << ipcp->get_name().toString() << endl;
 	FLUSH_LOG(DBG, ss);
 
-	for (lit = e->ribObjects.begin(); lit != e->ribObjects.end();
-			++lit) {
-		ss << "Name: " << lit->name_ <<
-			"; Class: "<< lit->class_;
-		ss << "; Instance: "<< lit->instance_ << endl;
-		ss << "Value: " << lit->displayable_value_ <<endl;
-		ss << "" << endl;
-	}
-
 	//Set query RIB response
 	QueryRIBPromise* promise = trans->get_promise<QueryRIBPromise>();
+
+	for (lit = e->ribObjects.begin(); lit != e->ribObjects.end();
+			++lit) {
+        struct QueryRIBObject obj;
+
+        obj.name = lit->name_;
+        obj.clazz = lit->class_;
+        obj.instance = lit->instance_;
+        obj.displayable_value = lit->displayable_value_;
+
+        promise->rib_objects.push_back(obj);
+	}
 
 	if(!promise){
 		assert(0);
@@ -103,7 +106,6 @@ void IPCManager_::query_rib_response_event_handler(rina::QueryRIBResponseEvent *
 	}
 
 	//Mark as completed
-	promise->serialized_rib = ss.str();
 	trans->completed(IPCM_SUCCESS);
 	remove_transaction_state(trans->tid);
 
