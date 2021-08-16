@@ -30,7 +30,7 @@ service IPCM {
 
 // IPCP info for list-ipcps
 message IPCP {
-  int32 id = 1;
+  uint64 id = 1;
   string name = 2;
   string type = 3;
   repeated string apps = 4;
@@ -66,7 +66,7 @@ message GetIfaceForDifRes {
 // query-rib
 
 message QueryRibReq {
-    int32 ipcp_id = 1;
+    uint64 ipcp_id = 1;
     string object_class = 2;
     string object_name = 3;
 }
@@ -83,7 +83,7 @@ message CreateIpcpReq {
 }
 
 message CreateIpcpRes {
-    int32 ipcp_id = 1;
+    uint64 ipcp_id = 1;
     string name = 2;
 }
 
@@ -98,7 +98,7 @@ message DestroyIpcpRes {}
 // enroll-to-dif
 
 message EnrollToDifReq {
-    int32 ipcp_id = 1;
+    uint64 ipcp_id = 1;
     string dif_name = 2;
     string supporting_dif_name = 3;
     string neighbor_process_name = 4;
@@ -112,7 +112,7 @@ message EnrollToDifRes {
 // assign-to-dif
 
 message AssignToDifReq {
-    int32 ipcp_id = 1;
+    uint64 ipcp_id = 1;
     string dif_name = 2;
     string dif_template = 3;
 }

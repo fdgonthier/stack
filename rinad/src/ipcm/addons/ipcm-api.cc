@@ -90,7 +90,7 @@ grpc::Status IPCMApiService::QueryRib(grpc::ServerContext* ctx,
     std::string object_class, object_name;
     std::ostringstream err;
     std::vector<struct QueryRIBObject>::iterator it;
-    int ipcp_id;
+    uint64_t ipcp_id;
 
     ipcp_id = req->ipcp_id();
     object_class = req->object_class();
@@ -141,7 +141,7 @@ grpc::Status IPCMApiService::CreateIpcp(grpc::ServerContext* ctx,
 grpc::Status IPCMApiService::DestroyIpcp(grpc::ServerContext* ctx,
                                          const ipcm_api::DestroyIpcpReq* req,
                                          ipcm_api::DestroyIpcpRes* res) {
-    int ipcp_id;
+    uint64_t ipcp_id;
     std::ostringstream err;
 
     ipcp_id = req->ipcp_id();
@@ -160,7 +160,8 @@ grpc::Status IPCMApiService::DestroyIpcp(grpc::ServerContext* ctx,
 grpc::Status IPCMApiService::EnrollToDif(grpc::ServerContext* ctx,
                                          const ipcm_api::EnrollToDifReq* req,
                                          ipcm_api::EnrollToDifRes* res) {
-    int ipcp_id, t1, t0 = rina::Time::get_time_in_ms();
+    uint64_t ipcp_id;
+    int t1, t0 = rina::Time::get_time_in_ms();
     std::ostringstream err;
     Promise promise;
     NeighborData neighbor_data;
