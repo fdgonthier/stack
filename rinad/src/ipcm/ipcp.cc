@@ -130,25 +130,27 @@ void IPCMIPCProcess::get_description(IPCPDescription &desc) {
     desc.id = get_id();
     desc.name = get_name().toString();
     desc.type = get_type();
+    desc.nstate = state_;
 
     switch (state_) {
     case IPCM_IPCP_CREATED:
-        desc.state = "CREATED";
+        desc.state_string = "CREATED";
         break;
     case IPCM_IPCP_INITIALIZED:
-        desc.state = "INITIALIZED";
+        desc.state_string = "INITIALIZED";
         break;
     case IPCM_IPCP_ASSIGN_TO_DIF_IN_PROGRESS:
-        desc.state = "ASSIGN TO DIF IN PROGRESS";
+        desc.state_string = "ASSIGN TO DIF IN PROGRESS";
         break;
     case IPCM_IPCP_ASSIGNED_TO_DIF: {
         std::stringstream s;
         s << "ASSIGNED TO DIF " << dif_name_.processName;
-        desc.state = s.str();
+        desc.state_string = s.str();
+        desc.difName = dif_name_.processName;
         break;
     }
     default:
-        desc.state = "UNKNOWN STATE";
+        desc.state_string = "UNKNOWN STATE";
     }
 
     if (registeredApplications.size() > 0) {

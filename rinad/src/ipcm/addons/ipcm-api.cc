@@ -62,6 +62,9 @@ grpc::Status IPCMApiService::ListIpcps(grpc::ServerContext* ctx,
             ipcp->set_id((*it).get_id());
             ipcp->set_name((*it).get_name());
             ipcp->set_type((*it).get_type());
+            ipcp->set_difname((*it).get_difname());
+            ipcp->set_state_string((*it).get_state_string());
+            ipcp->set_state((*it).get_nstate());
 
             for (auto appIt = (*it).get_apps().begin(); appIt != (*it).get_apps().end(); ++appIt)
                 ipcp->add_apps((*appIt));

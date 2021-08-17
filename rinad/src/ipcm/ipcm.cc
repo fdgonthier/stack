@@ -381,7 +381,7 @@ void IPCManager_::list_ipcps(std::ostream& os)
         os << desc.get_id() << " | "
            << desc.get_name() << " | "
            << desc.get_type() << " | "
-           << desc.get_state() << " | ";
+           << desc.get_state_string() << " | ";
 
         if (desc.get_apps().size() > 0) {
             std::list<std::string>::const_iterator it;

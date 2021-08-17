@@ -47,37 +47,25 @@ class IPCPDescription {
     friend class IPCMIPCProcess;
 
     public:
-    const int get_id() const {
-        return this->id;
-    }
-
-    const std::string& get_name() const {
-        return this->name;
-    }
-
-    const std::string& get_state() const {
-        return this->state;
-    }
-
-    const std::string& get_type() const {
-        return this->type;
-    }
-
-    const std::list<std::string>& get_apps() const {
-        return this->apps;
-    }
-
-    const std::list<int>& get_flows() const {
-        return this->flows;
-    }
+    const int get_id() const { return this->id; }
+    const int get_nstate() const { return this->nstate; }
+    const std::string& get_name() const { return this->name; }
+    const std::string& get_type() const { return this->type; }
+    const std::list<std::string>& get_apps() const { return this->apps; }
+    const std::list<int>& get_flows() const { return this->flows; }
+    const std::string& get_difname() const { return this->difName; }
+    const std::string& get_state_string() const { return this->state_string; }
 
     private:
     int id;               // ID of the process
+    int nstate;           // State of IPC process registration, as integer
+
     std::string name;     // Name of the IPC process
     std::string type;     // Type of IPC process
-    std::string state;    // State of IPC process registration
+    std::string state_string; // State of IPC process registration as text
     std::list<std::string> apps;  // Registered applications
     std::list<int> flows; // Flows ID
+    std::string difName;  // Name of the DIF the app is registered to
 };
 
 /**
