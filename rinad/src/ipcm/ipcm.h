@@ -137,7 +137,7 @@ public:
 struct QueryRIBObject {
     std::string name;
     std::string clazz;
-    std::string instance;
+    int64_t instance;
     std::string displayable_value;
 };
 

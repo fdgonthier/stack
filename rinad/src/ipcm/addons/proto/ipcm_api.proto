@@ -37,7 +37,7 @@ message IPCP {
 message RIBObject {
     string name = 1;
     string class = 2;
-    string instance = 3;
+    int64 instance = 3;
     string displayable_value = 4;
 }
 
