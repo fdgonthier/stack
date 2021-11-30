@@ -15,7 +15,9 @@ DIFConfigValidator::DIFConfigValidator(const rina::DIFInformation &dif_info,
 	else if (type == "shim-dummy")
 		type_ = SHIM_DUMMY;
 	else if (type == "shim-eth-vlan")
-		type_ = SHIM_ETH;
+		type_ = SHIM_ETH_VLAN;
+    else if (type == "shim-eth-rina")
+        type_ = SHIM_ETH_RAW;
 	else if (type == "shim-tcp-udp")
 		type_ = SHIM_TCP_UDP;
 	else if (type == "shim-hv")
@@ -28,7 +30,7 @@ bool DIFConfigValidator::validateConfigs()
 {
 	if (type_ == NORMAL)
 		return validateNormal();
-	else if (type_ == SHIM_ETH)
+	else if (type_ == SHIM_ETH_VLAN || type_ == SHIM_ETH_RAW)
 		return validateShimEth();
 	else if (type_ == SHIM_DUMMY)
 		return validateShimDummy();

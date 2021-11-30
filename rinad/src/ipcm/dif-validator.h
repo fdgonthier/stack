@@ -43,7 +43,8 @@ class DIFConfigValidator {
 public:
         enum Types{
                 NORMAL,
-                SHIM_ETH,
+                SHIM_ETH_RAW,
+                SHIM_ETH_VLAN,
                 SHIM_DUMMY,
                 SHIM_TCP_UDP,
                 SHIM_HV,
