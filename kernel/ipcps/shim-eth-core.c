@@ -71,6 +71,13 @@ extern struct kipcm * default_kipcm;
 struct eth_info {
         uint16_t vlan_id;
         char *   interface_name;
+
+        // Allow for the ethernet shim to disregard the interface MAC
+        // address.
+        u8 spoof_mac[6];
+
+        // This is set to 1 if we're to use the spoofed MAC.
+        bool use_spoof_mac;
 };
 
 static struct ipcp_factory_data {
@@ -579,6 +586,8 @@ eth_flow_allocate_request(struct ipcp_instance_data * data,
                 return -1;
         } */
 
+        LOG_DBG("Will try to create flow on port ID %d", id);
+
         flow = find_flow(data, id);
         if (!flow) {
                 flow = rkzalloc(sizeof(*flow), GFP_KERNEL);
@@ -719,6 +728,8 @@ eth_flow_allocate_response(struct ipcp_instance_data * data,
                 rfifo_destroy(flow->sdu_queue, (void (*)(void *)) du_destroy);
                 flow->sdu_queue = NULL;
         } else {
+                LOG_DBG("Allocating flow on port ID %d FAILED", port_id);
+
                 spin_lock(&data->lock);
                 flow->port_id_state = PORT_STATE_NULL;
                 spin_unlock(&data->lock);
@@ -799,7 +810,11 @@ static int eth_application_register(struct ipcp_instance_data* data,
                 name_destroy(data->app_name);
                 return -1;
         }
-        ha = gha_create(MAC_ADDR_802_3, data->dev->dev_addr);
+        if (!data->info->use_spoof_mac)
+                ha = gha_create(MAC_ADDR_802_3, data->dev->dev_addr);
+        else
+                ha = gha_create(MAC_ADDR_802_3, data->info->spoof_mac);
+
         if (!gha_is_ok(ha)) {
                 LOG_ERR("Failed to create gha");
                 name_destroy(data->app_name);
@@ -1485,6 +1500,12 @@ static int eth_set_net_devs_auto(struct ipcp_instance_data* data) {
         read_lock(&dev_base_lock);
         data->dev = __dev_get_by_name(&init_net, info->interface_name);
 
+        if (!data->dev) {
+            LOG_ERR("Unknown device: %s", info->interface_name);
+            read_unlock(&dev_base_lock);
+            return -1;
+        }
+
         if (is_vlan_dev(data->dev)) {
                 data->phy_dev = vlan_dev_real_dev(data->dev);
                 info->vlan_id = vlan_dev_vlan_id(data->dev);
@@ -1520,6 +1541,7 @@ static int eth_assign_to_dif(struct ipcp_instance_data * data,
         string_t *                      complete_interface;
         struct interface_data_mapping * mapping;
         int                             result;
+        string_t *                      spoof_mac;
 
         if (!data) {
                 LOG_ERR("Bogus data passed, bailing out");
@@ -1550,6 +1572,7 @@ static int eth_assign_to_dif(struct ipcp_instance_data * data,
         /* Retrieve configuration of IPC process from params */
         list_for_each_entry(tmp, &(config->ipcp_config_entries), next) {
                 const struct ipcp_config_entry * entry = tmp->entry;
+
                 if (!strcmp(entry->name, "interface-name")) {
                         ASSERT(entry->value);
 
@@ -1560,8 +1583,29 @@ static int eth_assign_to_dif(struct ipcp_instance_data * data,
                                 data->dif_name = NULL;
                                 return -1;
                         }
-                } else
-                        LOG_DBG("Unknown config param for eth shim, ignoring");
+                }
+                else if (!strcmp(entry->name, "spoof-mac")) {
+                        spoof_mac = rkstrdup(entry->value);
+                        if (!spoof_mac) {
+                                LOG_ERR("Cannot copy 'spoof-mac' value");
+                                return -1;
+                        }
+
+                        // Convert the string MAC address to it's
+                        // address representation.
+                        if (!mac_pton(spoof_mac, info->spoof_mac)) {
+                                LOG_ERR("Invalid spoof MAC: %s", spoof_mac);
+                                rkfree(spoof_mac);
+                                return -1;
+                        }
+
+                        LOG_INFO("Ethernet shim will pretend its MAC address is: %s",
+                                 spoof_mac);
+
+                        info->use_spoof_mac = 1;
+                        rkfree(spoof_mac);
+                }
+                else LOG_DBG("Ignoring unknown config param: %s", entry->name);
         }
 
         /* Fail here if we didn't get an interface */
@@ -1630,6 +1674,7 @@ static int eth_update_dif_config(struct ipcp_instance_data * data,
         string_t *                      complete_interface;
         struct interface_data_mapping * mapping;
         int                             result;
+        string_t *                      spoof_mac;
 
         if (!data) {
                 LOG_ERR("Bogus data passed, bailing out");
@@ -1651,15 +1696,34 @@ static int eth_update_dif_config(struct ipcp_instance_data * data,
 
                 entry = tmp->entry;
                 if (!strcmp(entry->name, "interface-name")) {
-                        ASSERT(entry->value);
-
                         info->interface_name = rkstrdup(entry->value);
                         if (!info->interface_name) {
-                                LOG_ERR("Cannot copy interface name");
+                                LOG_ERR("Cannot copy 'interface-name' value");
                                 return -1;
                         }
-                } else
-                        LOG_DBG("Unknown config param for Ethernet shim, ignoring");
+                }
+                else if (!strcmp(entry->name, "spoof-mac")) {
+                        spoof_mac = rkstrdup(entry->value);
+                        if (!spoof_mac) {
+                                LOG_ERR("Cannot copy 'spoof-mac' value");
+                                return -1;
+                        }
+
+                        // Convert the string MAC address to it's
+                        // address representation.
+                        if (!mac_pton(spoof_mac, info->spoof_mac)) {
+                                LOG_ERR("Invalid spoof MAC: %s", spoof_mac);
+                                rkfree(spoof_mac);
+                                return -1;
+                        }
+
+                        LOG_INFO("Ethernet shim will pretend its MAC address is: %s",
+                                 spoof_mac);
+
+                        info->use_spoof_mac = 1;
+                        rkfree(spoof_mac);
+                }
+                else LOG_DBG("Ignoring unknown config param: %s", entry->name);
         }
 
         dev_remove_pack(data->eth_packet_type);
