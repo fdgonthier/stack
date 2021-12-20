@@ -34,6 +34,8 @@
 #include <linux/if_packet.h>
 #include <linux/workqueue.h>
 #include <linux/notifier.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
 #include <net/pkt_sched.h>
 #include <net/sch_generic.h>
 
@@ -43,6 +45,9 @@
 #define SHIM_WIFI_AP_NAME   "shim-wifi-ap"
 
 #define RINA_PREFIX SHIM_NAME
+
+// FIXME: This should really be defined at compile time.
+#define DEFAULT_ARP_REQ_TIMEOUT_MS 5000
 
 #include "logs.h"
 #include "kipcm.h"
@@ -67,6 +72,8 @@ struct rcv_work_data {
 /* FIXME: To be removed ABSOLUTELY */
 extern struct kipcm * default_kipcm;
 
+struct dentry *dbg_root;
+
 /* Holds the configuration of one shim instance */
 struct eth_info {
         uint16_t vlan_id;
@@ -78,12 +85,24 @@ struct eth_info {
 
         // This is set to 1 if we're to use the spoofed MAC.
         bool use_spoof_mac;
+
+        /* ARP request timeout */
+        uint32_t arp_timeout_ms;
 };
 
-static struct ipcp_factory_data {
+struct ipcp_factory_data {
         struct list_head instances;
         struct notifier_block ntfy;
-} eth_data;
+
+#ifdef CONFIG_DEBUG_FS
+        struct dentry *dbg;
+#endif
+};
+
+struct ipcp_factory_data eth_data;
+struct ipcp_factory_data eth_vlan_data;
+struct ipcp_factory_data wifi_ap_data;
+struct ipcp_factory_data wifi_sta_data;
 
 enum port_id_state {
         PORT_STATE_NULL = 1,
@@ -159,6 +178,20 @@ struct ipcp_instance_data {
 
         /* Flow control between this IPCP and the associated netdev. */
         unsigned int tx_busy;
+
+#ifdef CONFIG_DEBUG_FS
+        // Base directory
+        struct dentry *dbg;
+
+        // Instance information
+        struct dentry *dbg_info;
+
+        // Flows information
+        struct dentry *dbg_flows;
+
+        // ARP timeout
+        struct dentry *dbg_timeout;
+#endif
 };
 
 /* Needed for eth_rcv function */
@@ -168,6 +201,130 @@ struct interface_data_mapping {
         struct net_device *         dev;
         struct ipcp_instance_data * data;
 };
+
+#ifdef CONFIG_DEBUG_FS
+static int eth_shim_dbg_inst_info_show(struct seq_file *s, void *v)
+{
+        char *ns;
+        struct ipcp_instance_data *data;
+
+        data = (struct ipcp_instance_data *)s->private;
+
+        seq_printf(s, "IPCP Id: %d\n", data->id);
+
+        ns = name_tostring(data->name);
+        if (ns) {
+                seq_printf(s, "IPCP Name: %s\n", ns);
+                rkfree(ns);
+        } else
+                seq_printf(s, "IPCP Name: Unknown\n");
+
+        ns = name_tostring(data->dif_name);
+        if (ns) {
+                seq_printf(s, "IPCP DIF Name: %s\n", ns);
+                rkfree(ns);
+        } else
+                seq_printf(s, "IPCP DIF Name: Unknown\n");
+
+        if (data->vlan_mode == VLAN_MODE_COMPAT)
+                seq_printf(s, "Working in eth-vlan compatibility mode.\n");
+        else
+                seq_printf(s, "Working in automatic interface mode.\n");
+
+        ns = name_tostring(data->app_name);
+        if (ns) {
+                seq_printf(s, "App Name: %s\n", ns);
+                rkfree(ns);
+        } else
+                seq_printf(s, "App Name: Unknown\n");
+
+        ns = name_tostring(data->daf_name);
+        if (ns) {
+                seq_printf(s, "DAF Name: %s\n", ns);
+                rkfree(ns);
+        } else
+                seq_printf(s, "DAF Name: Unknown\n");
+
+        seq_printf(s, "VLAN ID: %d\n", data->info->vlan_id);
+        seq_printf(s, "Ethernet interface: %s\n", data->info->interface_name);
+
+        if (data->info->use_spoof_mac) {
+                seq_printf(s, "Spoof MAC %u:%u:%u:%u:%u:%u\n",
+                           data->info->spoof_mac[0], data->info->spoof_mac[1],
+                           data->info->spoof_mac[2], data->info->spoof_mac[3],
+                           data->info->spoof_mac[4], data->info->spoof_mac[5]);
+        }
+
+        return 0;
+}
+
+static int eth_shim_dbg_inst_flows_show(struct seq_file *s, void *v)
+{
+        struct shim_eth_flow *flow;
+        struct ipcp_instance_data *data;
+        const uint8_t *ha;
+        char *ns;
+
+        data = (struct ipcp_instance_data *)s->private;
+
+        spin_lock_bh(&data->lock);
+
+        list_for_each_entry(flow, &data->flows, list) {
+                seq_printf(s, "Port Id: %d\n", flow->port_id);
+
+                if (gha_is_ok(flow->dest_ha)) {
+                        ha = gha_address(flow->dest_ha);
+                        seq_printf(s, "Dest Hardware Address: %u:%u:%u:%u:%u:%u\n",
+                                   ha[0], ha[1],  ha[2], ha[3], ha[4], ha[5]);
+                } else
+                        seq_printf(s, "Dest Hardware Address: Invalid\n");
+
+                ns = gpa_address_to_string_gfp(GFP_KERNEL, flow->dest_pa);
+                if (ns) {
+                        seq_printf(s, "Dest Protocol Address: %s\n", ns);
+                        rkfree(ns);
+                } else
+                        seq_printf(s, "Dest Protocol Address: Unknown\n");
+
+                if (flow->port_id_state == PORT_STATE_PENDING)
+                        seq_printf(s, "Port state: PENDING\n");
+                else if (flow->port_id_state == PORT_STATE_ALLOCATED)
+                        seq_printf(s, "Port state: ALLOCATED\n");
+                else
+                        seq_printf(s, "Port state: UNKNOWN\n");
+        }
+
+        spin_unlock_bh(&data->lock);
+
+        seq_printf(s, "\n");
+
+        return 0;
+}
+
+static int eth_shim_dbg_inst_info_open(struct inode *inode, struct file *file)
+{
+        return single_open(file, eth_shim_dbg_inst_info_show, inode->i_private);
+}
+
+static int eth_shim_dbg_inst_flows_open(struct inode *inode, struct file *file)
+{
+        return single_open(file, eth_shim_dbg_inst_flows_show, inode->i_private);
+}
+
+static const struct file_operations eth_shim_dbg_inst_info_ops = {
+        .open		= eth_shim_dbg_inst_info_open,
+        .read		= seq_read,
+        .llseek		= seq_lseek,
+        .release	= single_release,
+};
+
+static const struct file_operations eth_shim_dbg_inst_flows_ops = {
+        .open		= eth_shim_dbg_inst_flows_open,
+        .read		= seq_read,
+        .llseek		= seq_lseek,
+        .release	= single_release,
+};
+#endif
 
 static ssize_t eth_ipcp_attr_show(struct robject *        robj,
                                   struct robj_attribute * attr,
@@ -465,6 +622,7 @@ static int eth_unbind_user_ipcp(struct ipcp_instance_data * data,
 }
 
 static void rinarp_resolve_handler(void *             opaque,
+                                   bool               timed_out,
                                    const struct gpa * dest_pa,
                                    const struct gha * dest_ha)
 {
@@ -476,8 +634,6 @@ static void rinarp_resolve_handler(void *             opaque,
         LOG_DBG("Entered the ARP resolve handler of the Ethernet shim");
 
         ASSERT(opaque);
-        ASSERT(dest_pa);
-        ASSERT(dest_ha);
 
         data = (struct ipcp_instance_data *) opaque;
 
@@ -490,65 +646,80 @@ static void rinarp_resolve_handler(void *             opaque,
         }
 
         if (flow->port_id_state == PORT_STATE_PENDING) {
-                flow->port_id_state = PORT_STATE_ALLOCATED;
-                spin_unlock_bh(&data->lock);
+                if (!timed_out) {
+                        flow->port_id_state = PORT_STATE_ALLOCATED;
+                        spin_unlock_bh(&data->lock);
 
-                flow->dest_ha = gha_dup_ni(dest_ha);
+                        flow->dest_ha = gha_dup_ni(dest_ha);
+                        user_ipcp = flow->user_ipcp;
+                        ASSERT(user_ipcp);
 
-                user_ipcp = flow->user_ipcp;
-                ASSERT(user_ipcp);
+                        ipcp = kipcm_find_ipcp(default_kipcm, data->id);
+                        if (!ipcp) {
+                                LOG_ERR("KIPCM could not retrieve this IPCP");
+                                unbind_and_destroy_flow(data, flow);
+                                return;
+                        }
 
-                ipcp = kipcm_find_ipcp(default_kipcm, data->id);
-                if (!ipcp) {
-                        LOG_ERR("KIPCM could not retrieve this IPCP");
-                        unbind_and_destroy_flow(data, flow);
-                        return;
-                }
+                        ASSERT(user_ipcp);
+                        ASSERT(user_ipcp->ops);
+                        ASSERT(user_ipcp->ops->flow_binding_ipcp);
+                        if (user_ipcp->ops->flow_binding_ipcp(user_ipcp->data,
+                                                              flow->port_id,
+                                                              ipcp)) {
+                                LOG_ERR("Could not bind flow with user_ipcp");
+                                unbind_and_destroy_flow(data, flow);
+                                return;
+                        }
 
-                ASSERT(user_ipcp);
-                ASSERT(user_ipcp->ops);
-                ASSERT(user_ipcp->ops->flow_binding_ipcp);
-                if (user_ipcp->ops->flow_binding_ipcp(user_ipcp->data,
-                                                      flow->port_id,
-                                                      ipcp)) {
-                        LOG_ERR("Could not bind flow with user_ipcp");
-                        unbind_and_destroy_flow(data, flow);
-                        return;
-                }
+                        ASSERT(flow->sdu_queue);
 
-                ASSERT(flow->sdu_queue);
+                        while (!rfifo_is_empty(flow->sdu_queue)) {
+                                struct du * tmp = NULL;
 
-                while (!rfifo_is_empty(flow->sdu_queue)) {
-                        struct du * tmp = NULL;
+                                tmp = rfifo_pop(flow->sdu_queue);
+                                ASSERT(tmp);
 
-                        tmp = rfifo_pop(flow->sdu_queue);
-                        ASSERT(tmp);
+                                LOG_DBG("Got a new element from the fifo");
 
-                        LOG_DBG("Got a new element from the fifo");
+                                ASSERT(user_ipcp->ops->sdu_enqueue);
+                                if (user_ipcp->ops->du_enqueue(user_ipcp->data,
+                                                               flow->port_id,
+                                                               tmp)) {
+                                        LOG_ERR("Couldn't enqueue SDU to KFA ...");
+                                        return;
+                                }
+                        }
 
-                        ASSERT(user_ipcp->ops->sdu_enqueue);
-                        if (user_ipcp->ops->du_enqueue(user_ipcp->data,
-                                                        flow->port_id,
-                                                        tmp)) {
-                                LOG_ERR("Couldn't enqueue SDU to KFA ...");
+                        rfifo_destroy(flow->sdu_queue, (void (*)(void *)) du_destroy);
+                        flow->sdu_queue = NULL;
+
+                        if (kipcm_notify_flow_alloc_req_result(default_kipcm,
+                                                               data->id,
+                                                               flow->port_id,
+                                                               0)) {
+                                LOG_ERR("Couldn't tell flow is allocated to KIPCM");
+                                unbind_and_destroy_flow(data, flow);
                                 return;
                         }
                 }
+                /*
+                 * In case an ARP request went unanswered, it is
+                 * unless to notify the kipcm since it nobody to
+                 * inform. Just unbind and destroy the flow.
+                 */
+                else {
+                        spin_unlock_bh(&data->lock);
+                        LOG_DBG("Flow creation ARP request has timed out.");
+                        kfa_port_id_release(data->kfa, flow->port_id);
 
-                rfifo_destroy(flow->sdu_queue, (void (*)(void *)) du_destroy);
-                flow->sdu_queue = NULL;
+                        rfifo_destroy(flow->sdu_queue, (void (*)(void *)) du_destroy);
+                        flow->sdu_queue = NULL;
 
-                if (kipcm_notify_flow_alloc_req_result(default_kipcm,
-                                                       data->id,
-                                                       flow->port_id,
-                                                       0)) {
-                        LOG_ERR("Couldn't tell flow is allocated to KIPCM");
                         unbind_and_destroy_flow(data, flow);
-                        return;
                 }
-        } else {
-                spin_unlock_bh(&data->lock);
         }
+        else spin_unlock_bh(&data->lock);
 }
 
 static int
@@ -620,10 +791,12 @@ eth_flow_allocate_request(struct ipcp_instance_data * data,
                 if (rinarp_resolve_gpa(data->app_handle,
                                        flow->dest_pa,
                                        rinarp_resolve_handler,
+                                       data->info->arp_timeout_ms,
                                        data) &&
                     rinarp_resolve_gpa(data->daf_handle,
                                        flow->dest_pa,
                                        rinarp_resolve_handler,
+                                       data->info->arp_timeout_ms,
                                        data)) {
                         LOG_ERR("Failed to lookup ARP entry");
                         unbind_and_destroy_flow(data, flow);
@@ -1531,6 +1704,58 @@ static int eth_set_net_devs_auto(struct ipcp_instance_data* data) {
         return 0;
 }
 
+static void eth_handle_config_entry(struct eth_info *info,
+                                    const struct ipcp_config_entry *entry)
+{
+        string_t *s;
+        long res;
+
+        if (!strcmp(entry->name, "interface-name")) {
+                s = rkstrdup(entry->value);
+
+                if (!s) {
+                        LOG_ERR("Cannot copy interface name");
+                        goto oops;
+                }
+
+                info->interface_name = s;
+        }
+        else if (!strcmp(entry->name, "spoof-mac")) {
+                s = rkstrdup(entry->value);
+
+                if (!s) {
+                        LOG_ERR("Cannot copy 'spoof-mac' value");
+                        goto oops;
+                }
+
+                /* Convert the string MAC address to it's address
+                   representation. */
+                if (!mac_pton(s, info->spoof_mac)) {
+                        LOG_ERR("Invalid spoof MAC: %s", s);
+                        goto oops;
+                }
+
+                LOG_INFO("Ethernet shim will pretend its MAC address is: %s", s);
+                info->use_spoof_mac = 1;
+        }
+        else if (!strcmp(entry->name, "arp-timeout")) {
+                s = rkstrdup(entry->value);
+
+                if (kstrtol(s, 10, &res)) {
+                        LOG_ERR("Invalid value for ARP timeout: %s", s);
+                        goto oops;
+                }
+
+                info->arp_timeout_ms = res;
+        }
+        else LOG_DBG("Ignoring unknown config param: %s", entry->name);
+
+        return;
+
+        oops:
+        if (s) rkfree(s);
+}
+
 static int eth_assign_to_dif(struct ipcp_instance_data * data,
                              const struct name * dif_name,
                              const string_t * type,
@@ -1541,7 +1766,6 @@ static int eth_assign_to_dif(struct ipcp_instance_data * data,
         string_t *                      complete_interface;
         struct interface_data_mapping * mapping;
         int                             result;
-        string_t *                      spoof_mac;
 
         if (!data) {
                 LOG_ERR("Bogus data passed, bailing out");
@@ -1571,41 +1795,8 @@ static int eth_assign_to_dif(struct ipcp_instance_data * data,
 
         /* Retrieve configuration of IPC process from params */
         list_for_each_entry(tmp, &(config->ipcp_config_entries), next) {
-                const struct ipcp_config_entry * entry = tmp->entry;
-
-                if (!strcmp(entry->name, "interface-name")) {
-                        ASSERT(entry->value);
-
-                        info->interface_name = rkstrdup(entry->value);
-                        if (!info->interface_name) {
-                                LOG_ERR("Cannot copy interface name");
-                                name_destroy(data->dif_name);
-                                data->dif_name = NULL;
-                                return -1;
-                        }
-                }
-                else if (!strcmp(entry->name, "spoof-mac")) {
-                        spoof_mac = rkstrdup(entry->value);
-                        if (!spoof_mac) {
-                                LOG_ERR("Cannot copy 'spoof-mac' value");
-                                return -1;
-                        }
-
-                        // Convert the string MAC address to it's
-                        // address representation.
-                        if (!mac_pton(spoof_mac, info->spoof_mac)) {
-                                LOG_ERR("Invalid spoof MAC: %s", spoof_mac);
-                                rkfree(spoof_mac);
-                                return -1;
-                        }
-
-                        LOG_INFO("Ethernet shim will pretend its MAC address is: %s",
-                                 spoof_mac);
-
-                        info->use_spoof_mac = 1;
-                        rkfree(spoof_mac);
-                }
-                else LOG_DBG("Ignoring unknown config param: %s", entry->name);
+                const struct ipcp_config_entry *entry = tmp->entry;
+                eth_handle_config_entry(info, entry);
         }
 
         /* Fail here if we didn't get an interface */
@@ -1674,7 +1865,6 @@ static int eth_update_dif_config(struct ipcp_instance_data * data,
         string_t *                      complete_interface;
         struct interface_data_mapping * mapping;
         int                             result;
-        string_t *                      spoof_mac;
 
         if (!data) {
                 LOG_ERR("Bogus data passed, bailing out");
@@ -1693,37 +1883,7 @@ static int eth_update_dif_config(struct ipcp_instance_data * data,
         /* Retrieve configuration of IPC process from params */
         list_for_each_entry(tmp, &(new_config->ipcp_config_entries), next) {
                 const struct ipcp_config_entry * entry;
-
-                entry = tmp->entry;
-                if (!strcmp(entry->name, "interface-name")) {
-                        info->interface_name = rkstrdup(entry->value);
-                        if (!info->interface_name) {
-                                LOG_ERR("Cannot copy 'interface-name' value");
-                                return -1;
-                        }
-                }
-                else if (!strcmp(entry->name, "spoof-mac")) {
-                        spoof_mac = rkstrdup(entry->value);
-                        if (!spoof_mac) {
-                                LOG_ERR("Cannot copy 'spoof-mac' value");
-                                return -1;
-                        }
-
-                        // Convert the string MAC address to it's
-                        // address representation.
-                        if (!mac_pton(spoof_mac, info->spoof_mac)) {
-                                LOG_ERR("Invalid spoof MAC: %s", spoof_mac);
-                                rkfree(spoof_mac);
-                                return -1;
-                        }
-
-                        LOG_INFO("Ethernet shim will pretend its MAC address is: %s",
-                                 spoof_mac);
-
-                        info->use_spoof_mac = 1;
-                        rkfree(spoof_mac);
-                }
-                else LOG_DBG("Ignoring unknown config param: %s", entry->name);
+                eth_handle_config_entry(info, entry);
         }
 
         dev_remove_pack(data->eth_packet_type);
@@ -2012,6 +2172,9 @@ static struct ipcp_instance* eth_create(struct ipcp_factory_data*  data,
                                         uint_t		           us_nl_port)
 {
         struct ipcp_instance * inst;
+#ifdef CONFIG_DEBUG_FS
+        char buf[6]; // name of the DebugFS dir.
+#endif
 
         ASSERT(data);
         ASSERT(name);
@@ -2069,6 +2232,7 @@ static struct ipcp_instance* eth_create(struct ipcp_factory_data*  data,
                 inst_cleanup(inst);
                 return NULL;
         }
+        inst->data->info->arp_timeout_ms = DEFAULT_ARP_REQ_TIMEOUT_MS;
         inst->data->tx_busy = 0;
 
         inst->data->fspec = rkzalloc(sizeof(*inst->data->fspec), GFP_KERNEL);
@@ -2108,6 +2272,35 @@ static struct ipcp_instance* eth_create(struct ipcp_factory_data*  data,
         INIT_LIST_HEAD(&(inst->data->list));
         list_add(&(inst->data->list), &(data->instances));
 
+#ifdef CONFIG_DEBUG_FS
+        if (data->dbg) {
+                struct dentry *d;
+
+                snprintf(buf, sizeof(buf), "%d", id);
+                inst->data->dbg = debugfs_create_dir(buf, data->dbg);
+
+                if (inst->data->dbg) {
+                        d = debugfs_create_file("info",
+                                                S_IRUSR,
+                                                inst->data->dbg,
+                                                inst->data,
+                                                &eth_shim_dbg_inst_info_ops);
+                        inst->data->dbg_info = d;
+                        d = debugfs_create_file("flows",
+                                                S_IRUSR,
+                                                inst->data->dbg,
+                                                inst->data,
+                                                &eth_shim_dbg_inst_flows_ops);
+                        inst->data->dbg_flows = d;
+                        d = debugfs_create_u32("arp_timeout_ms",
+                                               S_IRUSR | S_IWUSR,
+                                               inst->data->dbg,
+                                               &inst->data->info->arp_timeout_ms);
+                        inst->data->dbg_timeout = d;
+                }
+        }
+#endif
+
         return inst;
 }
 
@@ -2144,6 +2337,17 @@ static int eth_destroy(struct ipcp_factory_data * data,
         /* Retrieve the instance */
         list_for_each_entry_safe(pos, next, &data->instances, list) {
                 if (pos->id == instance->data->id) {
+
+#ifdef CONFIG_DEBUG_FS
+                        if (instance->data->dbg_info)
+                                debugfs_remove(instance->data->dbg_info);
+                        if (instance->data->dbg_flows)
+                                debugfs_remove(instance->data->dbg_flows);
+                        if (instance->data->dbg_timeout)
+                                debugfs_remove(instance->data->dbg_timeout);
+                        if (instance->data->dbg)
+                                debugfs_remove(instance->data->dbg);
+#endif
 
                         /* Destroy existing flows */
                         list_for_each_entry_safe(flow, nflow, &pos->flows, list) {
@@ -2378,19 +2582,30 @@ static int __init mod_init(void)
                                                &eth_ops);
         shim_eth_vlan = kipcm_ipcp_factory_register(default_kipcm,
                                                     SHIM_VLAN_NAME,
-                                                    &eth_data,
+                                                    &eth_vlan_data,
                                                     &eth_vlan_ops);
         shim_wifi_ap = kipcm_ipcp_factory_register(default_kipcm,
                                                    SHIM_WIFI_AP_NAME,
-                                                   &eth_data,
+                                                   &wifi_ap_data,
                                                    &eth_ops2);
         shim_wifi_sta = kipcm_ipcp_factory_register(default_kipcm,
                                                     SHIM_WIFI_STA_NAME,
-                                                    &eth_data,
+                                                    &wifi_sta_data,
                                                     &eth_ops2);
 
         if (!shim_eth || !shim_eth_vlan || !shim_wifi_ap || !shim_wifi_sta)
                 goto fail;
+
+#ifdef CONFIG_DEBUG_FS
+        dbg_root = debugfs_create_dir("shim-eth", NULL);
+
+        if (dbg_root) {
+                eth_data.dbg = debugfs_create_dir(SHIM_NAME, dbg_root);
+                eth_vlan_data.dbg = debugfs_create_dir(SHIM_VLAN_NAME, dbg_root);
+                wifi_ap_data.dbg = debugfs_create_dir(SHIM_WIFI_AP_NAME, dbg_root);
+                wifi_sta_data.dbg = debugfs_create_dir(SHIM_WIFI_STA_NAME, dbg_root);
+        }
+#endif
 
         spin_lock_init(&data_instances_lock);
 
@@ -2418,6 +2633,19 @@ static void __exit mod_exit(void)
 
         flush_workqueue(rcv_wq);
         destroy_workqueue(rcv_wq);
+
+#ifdef CONFIG_DEBUG_FS
+        if (eth_data.dbg)
+                debugfs_remove(eth_data.dbg);
+        if (eth_vlan_data.dbg)
+                debugfs_remove(eth_vlan_data.dbg);
+        if (wifi_ap_data.dbg)
+                debugfs_remove(wifi_ap_data.dbg);
+        if (wifi_sta_data.dbg)
+                debugfs_remove(wifi_sta_data.dbg);
+        if (dbg_root)
+                debugfs_remove(dbg_root);
+#endif
 
         kipcm_ipcp_factory_unregister(default_kipcm, shim_eth);
         kipcm_ipcp_factory_unregister(default_kipcm, shim_eth_vlan);
