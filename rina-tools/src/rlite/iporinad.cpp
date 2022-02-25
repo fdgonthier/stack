@@ -539,7 +539,7 @@ Remote::tun_alloc()
     }
 
     tname[0] = '\0';
-    tun_fd   = os_tun_alloc(tname, IFF_TUN | IFF_NO_PI);
+    tun_fd   = os_tun_alloc(tname, IFF_TAP | IFF_NO_PI);
     if (tun_fd < 0) {
         cerr << "Failed to create tunnel" << endl;
         return -1;
