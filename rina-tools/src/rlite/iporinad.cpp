@@ -50,16 +50,30 @@ struct IPAddr {
         return addr < o.addr || (addr == o.addr && netbits < o.netbits);
     }
 
+    bool issubnet() const {
+        return !(addr & ~((1 << (32 - netbits)) - 1));
+    }
+
     /* Pick an host address in belonging to the same subnet. */
     IPAddr hostaddr(uint32_t host) const
     {
-        uint32_t hostmask = ~((1 << (32 - netbits)) - 1);
+        if (issubnet()) {
+            uint32_t hostmask = ~((1 << (32 - netbits)) - 1);
 
-        if (host & hostmask) {
-            throw "Host number out of range";
+            if (host & hostmask) {
+                throw "Host number out of range";
+            }
+
+            return IPAddr((addr & hostmask) + host, netbits);
         }
+        else throw "Address is not a subnet";
+    }
 
-        return IPAddr((addr & hostmask) + host, netbits);
+    IPAddr tosubnet() const {
+        if (issubnet())
+            return IPAddr(*this);
+        else
+            return IPAddr(~((1 << (32 - netbits)) - 1) & addr, netbits);
     }
 
     string noprefix() const;
@@ -99,7 +113,10 @@ struct Remote {
     /* IP address of the local and remote tunnel endpoint, and tunnel subnet. */
     IPAddr tun_local_addr;
     IPAddr tun_remote_addr;
-    IPAddr tun_subnet;
+    IPAddr tun_cfg;
+
+    /* Only try to connect to this remote if this is 'true' */
+    bool configured_remote;
 
     /* True if we need to allocate a control/data flow for this remote. */
     bool flow_alloc_needed[IPOR_MAX];
@@ -113,21 +130,23 @@ struct Remote {
     Remote() : tun_fd(-1), rfd(-1)
     {
         flow_alloc_needed[IPOR_CTRL] = flow_alloc_needed[IPOR_DATA] = true;
+        configured_remote = false;
     }
 
     Remote(const string &a, const string &d, const IPAddr &i)
-        : app_name(a), dif_name(d), tun_fd(-1), tun_subnet(i), rfd(-1)
+        : app_name(a), dif_name(d), tun_fd(-1), tun_cfg(i), rfd(-1)
     {
         flow_alloc_needed[IPOR_CTRL] = flow_alloc_needed[IPOR_DATA] = true;
+        configured_remote = true;
     }
 
     /* Allocate a tunnel device for this remote. */
-    int tun_alloc();
+    int tun_alloc(int use_tap);
 
     /* Configure tunnel device IP address and routes. */
     int ip_configure() const;
     int ip_cleanup() const;
-    int mss_configure() const;
+    int mss_configure(int use_tap) const;
 };
 
 #define NUM_WORKERS 1
@@ -153,12 +172,21 @@ public:
     IPoRINA();
     ~IPoRINA();
 
+    /* Auto-connection thread. */
+    void connect_to_remotes();
+
     /* Enable verbose mode */
     int verbose = 0;
+
+    /* Use a TAP interface instead of a TUN. */
+    bool use_tap = false;
 
     /* QoS parameters */
     int max_delay = 0;
     int max_loss  = RINA_FLOW_SPEC_LOSS_MAX;
+
+    /* Number of remotes to actively connect to. */
+    int nb_configured_remotes = 0;
 
     /* Tun device tx queue length */
     int tx_q_len = 0;
@@ -168,7 +196,6 @@ public:
     int main_loop();
     int parse_conf(const char *path);
     void dump_conf();
-    void connect_to_remotes();
     int submit(Remote *r);
 };
 
@@ -197,7 +224,8 @@ ser_common(::google::protobuf::MessageLite &gm, char *buf, int size)
 struct Hello : public Obj {
     string tun_subnet;   /* Subnet to be used for the tunnel */
     string tun_src_addr; /* IP address of the source */
-    string tun_dst_addr; /* IP address of the destination */
+    string tun_dst_addr; /* IP address of the destination, maybe be
+                          * network mask */
     uint32_t num_routes; /* How many route to exchange */
 
     Hello() : num_routes(0) {}
@@ -359,21 +387,24 @@ IPAddr::IPAddr(const string &_p) : repr(_p)
     size_t slash;
     int m;
 
+    netbits = 0;
+    addr = 0;
+
+    if (p == "") return;
+
     slash = p.find("/");
 
-    if (slash == string::npos) {
-        throw "Invalid IP prefix";
+    if (slash != string::npos) {
+        /* Extract the mask m in "a.b.c.d/m" */
+        if (string2int(p.substr(slash + 1), m)) {
+            throw "Invalid IP prefix";
+        }
+        if (m < 1 || m > 30) {
+            throw "Invalid IP prefix";
+        }
+        netbits = m;
+        p = p.substr(0, slash);
     }
-
-    /* Extract the mask m in "a.b.c.d/m" */
-    if (string2int(p.substr(slash + 1), m)) {
-        throw "Invalid IP prefix";
-    }
-    if (m < 1 || m > 30) {
-        throw "Invalid IP prefix";
-    }
-    netbits = m;
-    p       = p.substr(0, slash);
 
     /* Extract a, b, c and d. */
     std::replace(p.begin(), p.end(), '.', ' ');
@@ -529,17 +560,21 @@ probe_mss(int fd)
 }
 
 int
-Remote::tun_alloc()
+Remote::tun_alloc(int use_tap)
 {
     char tname[IFNAMSIZ];
+    int opt = IFF_TUN;
 
     if (tun_name != string()) {
         /* Nothing to do. */
         return 0;
     }
 
+    if (use_tap)
+        opt = IFF_TAP;
+
     tname[0] = '\0';
-    tun_fd   = os_tun_alloc(tname, IFF_TAP | IFF_NO_PI);
+    tun_fd   = os_tun_alloc(tname, opt | IFF_NO_PI);
     if (tun_fd < 0) {
         cerr << "Failed to create tunnel" << endl;
         return -1;
@@ -641,7 +676,9 @@ Remote::ip_configure() const
 
         cmdss << "ethtool -K " << tun_name << " tso off gso off";
         if (execute_command(cmdss)) {
-            cerr << "Failed to disable TSO and GSO for " << tun_name << endl;
+            cerr << "Failed to disable TSO and GSO for " << tun_name
+                 << " [cmd: " << cmdss.str() << "]"
+                 << endl;
             return -1;
         }
     }
@@ -652,7 +689,9 @@ Remote::ip_configure() const
 
 	    cmdss << "ip link set " << tun_name << " txqueuelen " << g->tx_q_len;
 	    if (execute_command(cmdss)) {
-		    cerr << "Failed to set txqueuelen" << endl;
+		    cerr << "Failed to set txqueuelen"
+                 << " [cmd: " << cmdss.str() << "]"
+                 << endl;
 		    return -1;
 	    }
     }
@@ -663,21 +702,38 @@ Remote::ip_configure() const
 
         cmdss << "ip link set dev " << tun_name << " up";
         if (execute_command(cmdss)) {
-            cerr << "Failed to bring device " << tun_name << " up" << endl;
+            cerr << "Failed to bring device " << tun_name << " up"
+                 << " [cmd: " << cmdss.str() << "]"
+                 << endl;
             return -1;
         }
     }
 
     {
-        /* Assign the designated IP address to the tunnel device. */
-        stringstream cmdss;
+        if (!tun_local_addr.empty()) {
+            /* Assign the designated IP address to the tunnel device. */
+            stringstream cmdss;
 
-        cmdss << "ip addr add " << tun_local_addr.repr << " dev " << tun_name;
-        if (execute_command(cmdss)) {
-            cerr << "Failed to assign IP address to interface " << tun_name
-                 << endl;
-            return -1;
+            cmdss << "ip addr add " << tun_local_addr.repr << " dev " << tun_name;
+            if (execute_command(cmdss)) {
+                cerr << "Failed to assign IP address to interface " << tun_name
+                     << " [cmd: " << cmdss.str() << "]"
+                     << endl;
+                return -1;
+            }
         }
+
+        // if (!tun_cfg.empty() && !tun_cfg.issubnet()) {
+        //     stringstream cmdss;
+
+        //     cmdss << "ip route add " << tun_cfg.tosubnet().repr << " dev " << tun_name;
+        //     if (execute_command(cmdss)) {
+        //         cerr << "Failed to add local route to interface " << tun_name
+        //              << " [cmd: " << cmdss.str() << "]"
+        //              << endl;
+        //         return -1;
+        //     }
+        // }
     }
 
     /* Setup the routes advertised by the remote peer. */
@@ -688,7 +744,9 @@ Remote::ip_configure() const
               << tun_remote_addr.noprefix() << " dev " << tun_name;
         if (execute_command(cmdss)) {
             cerr << "Failed to add route for subnet "
-                 << static_cast<string>(route.subnet) << endl;
+                 << static_cast<string>(route.subnet)
+                 << " [cmd: " << cmdss.str() << "]"
+                 << endl;
             return -1;
         }
     }
@@ -726,7 +784,7 @@ Remote::ip_cleanup() const
 }
 
 int
-Remote::mss_configure() const
+Remote::mss_configure(int use_tap) const
 {
     stringstream cmdss;
     unsigned int mss = rina_flow_mss_get(rfd);
@@ -741,7 +799,8 @@ Remote::mss_configure() const
         mss = FDFWD_MAX_BUFSZ;
     }
 
-    cmdss << "ip link set mtu " << mss << " dev " << tun_name;
+    // If we use TAP we need to leave space for the Ethernet header
+    cmdss << "ip link set mtu " << mss - (use_tap ? 14 : 0) << " dev " << tun_name;
 
     if (execute_command(cmdss)) {
         cerr << "Failed to set MTU for device " << tun_name << endl;
@@ -797,16 +856,17 @@ IPoRINA::parse_conf(const char *path)
             }
 
         } else if (tokens[0] == "remote") {
-            IPAddr subnet;
+            IPAddr tun_cfg;
 
-            if (tokens.size() != 4) {
+            if (tokens.size() != 4 && tokens.size() != 5) {
                 cerr << "Invalid 'remote' directive at line " << lines_cnt
                      << endl;
                 return -1;
             }
 
             try {
-                subnet = IPAddr(tokens[3]);
+                // Might be a subnet, or not. TBD later.
+                tun_cfg = IPAddr(tokens[3]);
             } catch (...) {
                 cerr << "Invalid IP prefix at line " << lines_cnt << endl;
                 return -1;
@@ -817,7 +877,8 @@ IPoRINA::parse_conf(const char *path)
                      << endl;
                 return -1;
             }
-            remotes[tokens[1]] = Remote(tokens[1], tokens[2], subnet);
+
+            remotes[tokens[1]] = Remote(tokens[1], tokens[2], tun_cfg);
 
         } else if (tokens[0] == "route") {
             IPAddr subnet;
@@ -839,6 +900,8 @@ IPoRINA::parse_conf(const char *path)
         }
     }
 
+    nb_configured_remotes = remotes.size();
+
     fin.close();
 
     return 0;
@@ -856,7 +919,7 @@ IPoRINA::dump_conf()
     cout << "Remotes:" << endl;
     for (const auto &kv : remotes) {
         cout << "   " << kv.second.app_name << " in DIF " << kv.second.dif_name
-             << ", tunnel prefix " << kv.second.tun_subnet.repr << endl;
+             << ", tunnel config " << kv.second.tun_cfg.repr << endl;
     }
 
     cout << "Advertised routes:" << endl;
@@ -866,7 +929,7 @@ IPoRINA::dump_conf()
 }
 
 int
-IPoRINA::setup(void)
+IPoRINA::setup()
 {
     rfd = rina_open();
     if (rfd < 0) {
@@ -889,7 +952,7 @@ IPoRINA::setup(void)
 
     /* Create a TUN device for each remote. */
     for (auto &kv : remotes) {
-        if (kv.second.tun_alloc()) {
+        if (kv.second.tun_alloc(this->use_tap)) {
             return -1;
         }
     }
@@ -1012,7 +1075,7 @@ IPoRINA::main_loop()
             }
             remotes[remote_name].rfd                          = cfd;
             remotes[remote_name].flow_alloc_needed[IPOR_DATA] = false;
-            remotes[remote_name].mss_configure();
+            remotes[remote_name].mss_configure(use_tap);
             /* Submit the new fd mapping to a worker thread. */
             submit(&remotes[remote_name]);
             continue;
@@ -1033,7 +1096,7 @@ IPoRINA::main_loop()
 
             r.app_name = remote_name;
             r.dif_name = string();
-            if (r.tun_alloc()) {
+            if (r.tun_alloc(use_tap)) {
                 close(cfd);
                 goto abor;
             }
@@ -1041,9 +1104,10 @@ IPoRINA::main_loop()
 
         remotes[remote_name].tun_local_addr  = IPAddr(hello.tun_dst_addr);
         remotes[remote_name].tun_remote_addr = IPAddr(hello.tun_src_addr);
+        remotes[remote_name].tun_cfg         = IPAddr(hello.tun_subnet);
 
         cout << "Hello received from " << remote_name << ": "
-             << hello.num_routes << " routes, tun_subnet " << hello.tun_subnet
+             << hello.num_routes << " routes, tun_cfg " << hello.tun_subnet
              << ", local IP "
              << static_cast<string>(remotes[remote_name].tun_local_addr)
              << ", remote IP "
@@ -1181,7 +1245,7 @@ IPoRINA::connect_to_remotes()
                         goto abor;
                     }
                     kv.second.rfd = rfd;
-                    kv.second.mss_configure();
+                    kv.second.mss_configure(this->use_tap);
 
                     /* Submit the new fd mapping to a worker thread. */
                     submit(&kv.second);
@@ -1189,19 +1253,24 @@ IPoRINA::connect_to_remotes()
                 } else {
                     /* This is a control connection. */
 
-                    /* Assign tunnel IP addresses if needed. */
-                    if (kv.second.tun_local_addr.empty() ||
-                        kv.second.tun_remote_addr.empty()) {
-                        kv.second.tun_local_addr =
-                            kv.second.tun_subnet.hostaddr(1);
-                        kv.second.tun_remote_addr =
-                            kv.second.tun_subnet.hostaddr(2);
+                    if (kv.second.tun_cfg.issubnet()) {
+                        /* Assign tunnel IP addresses if needed. */
+                        if (kv.second.tun_local_addr.empty() ||
+                            kv.second.tun_remote_addr.empty()) {
+                            kv.second.tun_local_addr =
+                                kv.second.tun_cfg.hostaddr(1);
+                            kv.second.tun_remote_addr =
+                                kv.second.tun_cfg.hostaddr(2);
+                        }
+                    } else {
+                        kv.second.tun_local_addr = kv.second.tun_cfg;
+                        kv.second.tun_remote_addr = IPAddr();
                     }
 
                     /* Exchange routes. */
                     m.m_start("hello", "/hello");
                     hello.num_routes   = local_routes.size();
-                    hello.tun_subnet   = kv.second.tun_subnet;
+                    hello.tun_subnet   = kv.second.tun_cfg;
                     hello.tun_src_addr = kv.second.tun_local_addr;
                     hello.tun_dst_addr = kv.second.tun_remote_addr;
                     if (cdap_obj_send(&conn, &m, 0, &hello) < 0) {
@@ -1222,6 +1291,20 @@ IPoRINA::connect_to_remotes()
                 }
 
                 kv.second.flow_alloc_needed[i] = false;
+
+                if (verbose > 2) {
+                    cout << "Established: ";
+
+                    if (i == IPOR_DATA)
+                        cout << "Data connection to ";
+                    else
+                        cout << "Control connection to ";
+
+                    cout << kv.second.app_name
+                         << " through DIF " << kv.second.dif_name
+                         << endl;
+                }
+
             abor:
                 /* Don't close a data file descriptor which is going
                  * to be used. */
@@ -1282,10 +1365,11 @@ int
 main(int argc, char **argv)
 {
     const char *confpath = "/etc/rina/iporinad.conf";
-    int background       = 0;
+    int background = 0;
     int opt;
+    std::thread fa_th;
 
-    while ((opt = getopt(argc, argv, "hc:vL:E:t:w")) != -1) {
+    while ((opt = getopt(argc, argv, "hc:vL:E:t:wT")) != -1) {
         switch (opt) {
         case 'h':
             usage();
@@ -1323,6 +1407,10 @@ main(int argc, char **argv)
             }
             break;
 
+        case 'T':
+            g->use_tap = 1;
+            break;
+
         case 'w':
             background = 1;
             break;
@@ -1345,29 +1433,26 @@ main(int argc, char **argv)
     }
 
     /* Parse configuration file. */
-    if (g->parse_conf(confpath)) {
+    if (g->parse_conf(confpath))
         return -1;
-    }
 
-    if (g->verbose) {
+    if (g->verbose)
         g->dump_conf();
-    }
 
     /* Name registration and creation of TUN devices. */
-    if (g->setup()) {
+    if (g->setup())
         return -1;
-    }
 
-    if (background) {
+    if (background)
         daemonize();
-    }
 
     /* Start the threads that will carry out the forwarding work. */
     g->start_workers();
 
-    /* Start a thread that periodically tries to connect to
-     * the remote peers specified by the configuration. */
-    std::thread fa_th(&IPoRINA::connect_to_remotes, g);
+    /* Start the auto-connect thread if there is any configured
+       remotes */
+    if (g->nb_configured_remotes > 0)
+        fa_th = std::thread(&IPoRINA::connect_to_remotes, g);
 
     return g->main_loop();
 }
