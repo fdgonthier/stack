@@ -159,7 +159,6 @@ class IPoRINA {
     Local local;
     map<string, Remote> remotes;
     list<Route> local_routes;
-    string bridge;
 
     /* Map to keep track of active sessions. Used to react on
      * session termination. */
@@ -185,6 +184,15 @@ public:
 
     /* Use a TAP interface instead of a TUN. */
     bool use_tap = false;
+
+    /* Manage the bridge or not */
+    bool manage_bridge = false;
+
+    /* If using a bridge, do we manage the interfaces? */
+    bool manage_if = false;
+
+    /* Name of the bridge to create or use. */
+    string bridge;
 
     /* QoS parameters */
     int max_delay = 0;
@@ -908,15 +916,6 @@ IPoRINA::parse_conf(const char *path)
             }
 
             local_routes.push_back(Route(subnet));
-
-        } else if (tokens[0] == "bridge") {
-
-            if (tokens.size() != 2) {
-                cerr << "Invalid 'bridge' directive at line " << lines_cnt
-                     << endl;
-            }
-
-            bridge = tokens[1];
         }
     }
 
@@ -949,7 +948,7 @@ IPoRINA::dump_conf()
 }
 
 void IPoRINA::cleanup() {
-    if (!bridge.empty()) {
+    if (manage_bridge) {
         if (verbose > 1)
             cout << "Cleaning up bridge " << bridge << endl;
 
@@ -1004,8 +1003,9 @@ IPoRINA::setup()
         }
     }
 
-    /* Create a bridge if needed. */
-    if (!bridge.empty()) {
+    if (manage_bridge) {
+        /* Create a bridge if needed. */
+
         { stringstream cmdss;
             cmdss << "brctl addbr " << bridge;
             if (execute_command(cmdss)) {
@@ -1024,25 +1024,21 @@ IPoRINA::setup()
         if (verbose >= 1)
             cout << "Created bridge device " << bridge << endl;
     }
+    else if (manage_if) {
+        /* If we do not manage the bridge, check that the bridge exists. */
 
-    return 0;
-}
-
-int IPoRINA::add_if_bridge(const string ifname) {
-    stringstream ss;
-
-    ss << "brctl addif " << bridge << " " << ifname;
-    if (execute_command(ss)) {
-        cerr << "Could not add interface "
-             << ifname << " to bridge " << bridge
-             << endl;
-        return -1;
+        { stringstream cmdss;
+            cmdss << "ip link show " << bridge;
+            if (execute_command(cmdss) == 255) {
+                cerr << "Bridge " << bridge << " does not seem to exists" << endl
+                     << "It needs to exists before starting the program" << endl;
+                return -1;
+            } else {
+                if (verbose >= 1)
+                    cout << "Bridge " << bridge << " correctly exists." << endl;
+            }
+        }
     }
-
-    if (verbose > 1)
-        cout << "Added interface " << ifname
-             << " to bridge " << bridge
-             << endl;
 
     return 0;
 }
@@ -1194,17 +1190,19 @@ IPoRINA::main_loop()
             }
 
             /* Add the new tunnel to the bridge if needed. */
-            if (!bridge.empty()) {
+            if (manage_if) {
+                stringstream cmdss;
+
                 if (verbose > 1)
                     cout << "Adding interface " << r.tun_name
                          << " to bridge " << bridge
                          << endl;
 
-                if (add_if_bridge(r.tun_name)) {
-                    cerr << "Failed to add " << r.tun_name
+                cmdss << "brctl addif " << bridge << " " << r.tun_name;
+                if (execute_command(cmdss))
+                    cerr << "Could not add interface " << r.tun_name
                          << " to bridge " << bridge
                          << endl;
-                }
             }
         }
 
@@ -1460,6 +1458,9 @@ usage(void)
 {
     cout << "iporinad [OPTIONS]" << endl
          << "   -h : show this help" << endl
+         << "   -T : create a TAP device" << endl
+         << "   -B <bridge name>: create and manage a bridge locally (implies -T)" << endl
+         << "   -b <bridge name>: reuse and manage existing bridge (implies -T)" << endl
          << "   -c CONF_FILE: path to config file "
             "(default /etc/rina/iporinad.conf)" << endl
          << "   -L NUM : maximum loss probability introduced by the flow "
@@ -1467,9 +1468,14 @@ usage(void)
          << RINA_FLOW_SPEC_LOSS_MAX << ")" << endl
          << "   -E NUM : maximum delay introduced by the flow (microseconds)"
          << endl
-	 << "   -t NUM : tunnel TUN device tx queue length (packets)"
-	 << endl
-         << "   -v : be verbose" << endl;
+         << "   -t NUM : tunnel TUN device tx queue length (packets)"
+         << endl
+         << "   -v : be verbose" << endl
+         << endl
+         << "Unmanaged bridge: " << endl
+         << "    Add TAP interfaces to the bridge as they are created" << endl
+         << "Managed bridge: " << endl
+         << "    Create and destroy bridge as well as manage the interface" << endl;
 }
 
 int
@@ -1479,7 +1485,7 @@ main(int argc, char **argv)
     int background = 0;
     int opt;
 
-    while ((opt = getopt(argc, argv, "hc:vL:E:t:wT")) != -1) {
+    while ((opt = getopt(argc, argv, "hc:vL:E:t:wTb:B:")) != -1) {
         switch (opt) {
         case 'h':
             usage();
@@ -1518,7 +1524,21 @@ main(int argc, char **argv)
             break;
 
         case 'T':
-            g->use_tap = 1;
+            g->use_tap = true;
+            break;
+
+        case 'B':
+            g->use_tap = true;
+            g->manage_bridge = true;
+            g->manage_if = true;
+            g->bridge = optarg;
+            break;
+
+        case 'b':
+            g->use_tap = true;
+            g->manage_bridge = false;
+            g->manage_if = true;
+            g->bridge = optarg;
             break;
 
         case 'w':
