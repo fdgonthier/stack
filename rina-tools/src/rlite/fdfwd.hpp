@@ -83,6 +83,7 @@ public:
     void run();
     FwdToken get_next_closed();
     int closed_eventfd() const { return closed_syncfd; }
+    void finish();
 };
 
 #endif /* __FDFWD_HH__ */

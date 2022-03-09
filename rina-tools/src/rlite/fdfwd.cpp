@@ -71,7 +71,9 @@ FwdWorker::FwdWorker(int idx_, int verb) : idx(idx_), nfds(0), verbose(verb)
 
 FwdWorker::~FwdWorker()
 {
-    th.join();
+    if (th.joinable())
+        th.join();
+
     close(repoll_syncfd);
     close(closed_syncfd);
 }
@@ -141,6 +143,13 @@ FwdWorker::get_next_closed()
     }
 
     return ret;
+}
+
+void FwdWorker::finish() {
+    eventfd_write(repoll_syncfd);
+
+    close(repoll_syncfd);
+    close(closed_syncfd);
 }
 
 /* Called under worker lock. */
@@ -260,6 +269,12 @@ FwdWorker::run()
                 eventfd_drain(repoll_syncfd);
                 lock.unlock();
 
+            } else if (pfds[-1].revents & POLLNVAL) {
+                if (verbose >= 2)
+                    printf("repoll_syncfd is now invalid, terminating.\n");
+
+                // We're done!
+                return;
             } else {
                 printf("w%d: Error event %d on repoll_syncfd\n", idx,
                        pfds[-1].revents);
@@ -322,6 +337,13 @@ FwdWorker::run()
                                fds[i].fd);
                     }
                 }
+            } else if (pfds[i].revents & POLLNVAL) {
+                if (verbose >= 2)
+                    printf("FD %d is now invalid, terminating.\n", fds[j].fd);
+
+                terminate(i, 0, EPIPE);
+                lock.unlock();
+                return;
             }
         }
 

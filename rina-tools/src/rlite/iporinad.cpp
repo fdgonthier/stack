@@ -159,6 +159,7 @@ class IPoRINA {
     Local local;
     map<string, Remote> remotes;
     list<Route> local_routes;
+    string bridge;
 
     /* Map to keep track of active sessions. Used to react on
      * session termination. */
@@ -168,12 +169,16 @@ class IPoRINA {
     /* Worker threads that forward traffic. */
     vector<std::unique_ptr<FwdWorker>> workers;
 
+    /* Auto-connection thread. */
+    void connect_to_remotes();
+
 public:
     IPoRINA();
     ~IPoRINA();
 
-    /* Auto-connection thread. */
-    void connect_to_remotes();
+    /* This is set to 'true' on interrupt signal to start the cleanup
+       process. */
+    bool cleanup_triggered = false;
 
     /* Enable verbose mode */
     int verbose = 0;
@@ -192,11 +197,15 @@ public:
     int tx_q_len = 0;
 
     void start_workers();
+    std::thread *start_connect_thread();
+
     int setup();
+    void cleanup();
     int main_loop();
     int parse_conf(const char *path);
     void dump_conf();
     int submit(Remote *r);
+    int add_if_bridge(string ifname);
 };
 
 /*
@@ -368,6 +377,13 @@ string2int(const string &s, int &ret)
 }
 
 IPoRINA::IPoRINA() : rfd(-1), verbose(0) {}
+
+std::thread *IPoRINA::start_connect_thread() {
+    if (nb_configured_remotes > 0)
+        return new std::thread(&IPoRINA::connect_to_remotes, this);
+
+    return 0;
+}
 
 void
 IPoRINA::start_workers()
@@ -677,7 +693,6 @@ Remote::ip_configure() const
         cmdss << "ethtool -K " << tun_name << " tso off gso off";
         if (execute_command(cmdss)) {
             cerr << "Failed to disable TSO and GSO for " << tun_name
-                 << " [cmd: " << cmdss.str() << "]"
                  << endl;
             return -1;
         }
@@ -690,7 +705,6 @@ Remote::ip_configure() const
 	    cmdss << "ip link set " << tun_name << " txqueuelen " << g->tx_q_len;
 	    if (execute_command(cmdss)) {
 		    cerr << "Failed to set txqueuelen"
-                 << " [cmd: " << cmdss.str() << "]"
                  << endl;
 		    return -1;
 	    }
@@ -703,7 +717,6 @@ Remote::ip_configure() const
         cmdss << "ip link set dev " << tun_name << " up";
         if (execute_command(cmdss)) {
             cerr << "Failed to bring device " << tun_name << " up"
-                 << " [cmd: " << cmdss.str() << "]"
                  << endl;
             return -1;
         }
@@ -717,7 +730,6 @@ Remote::ip_configure() const
             cmdss << "ip addr add " << tun_local_addr.repr << " dev " << tun_name;
             if (execute_command(cmdss)) {
                 cerr << "Failed to assign IP address to interface " << tun_name
-                     << " [cmd: " << cmdss.str() << "]"
                      << endl;
                 return -1;
             }
@@ -745,7 +757,6 @@ Remote::ip_configure() const
         if (execute_command(cmdss)) {
             cerr << "Failed to add route for subnet "
                  << static_cast<string>(route.subnet)
-                 << " [cmd: " << cmdss.str() << "]"
                  << endl;
             return -1;
         }
@@ -897,6 +908,15 @@ IPoRINA::parse_conf(const char *path)
             }
 
             local_routes.push_back(Route(subnet));
+
+        } else if (tokens[0] == "bridge") {
+
+            if (tokens.size() != 2) {
+                cerr << "Invalid 'bridge' directive at line " << lines_cnt
+                     << endl;
+            }
+
+            bridge = tokens[1];
         }
     }
 
@@ -928,6 +948,33 @@ IPoRINA::dump_conf()
     }
 }
 
+void IPoRINA::cleanup() {
+    if (!bridge.empty()) {
+        if (verbose > 1)
+            cout << "Cleaning up bridge " << bridge << endl;
+
+        { stringstream cmdss;
+            cmdss << "ip link set " << bridge << " down";
+            if (execute_command(cmdss))
+                cerr << "Could not take down bridge: " << bridge << endl;
+        }
+
+        { stringstream cmdss;
+            cmdss << "brctl delbr " << bridge;
+            if (execute_command(cmdss))
+                cerr << "Could not erase bridge: " << bridge << endl;
+        }
+    }
+
+    /* Ask the remote to finish */
+    for (auto const & r : remotes)
+        close(r.second.rfd);
+
+    /* Ask the workers to finish */
+    for (auto const & w : workers)
+        w->finish();
+}
+
 int
 IPoRINA::setup()
 {
@@ -956,6 +1003,46 @@ IPoRINA::setup()
             return -1;
         }
     }
+
+    /* Create a bridge if needed. */
+    if (!bridge.empty()) {
+        { stringstream cmdss;
+            cmdss << "brctl addbr " << bridge;
+            if (execute_command(cmdss)) {
+                cerr << "Could not create bridge " << bridge << endl;
+                return -1;
+            }
+        }
+        { stringstream cmdss;
+            cmdss << "ip link set " << bridge << " up";
+            if (execute_command(cmdss)) {
+                cerr << "Could not put bridge up" << bridge << endl;
+                return -1;
+            }
+        }
+
+        if (verbose >= 1)
+            cout << "Created bridge device " << bridge << endl;
+    }
+
+    return 0;
+}
+
+int IPoRINA::add_if_bridge(const string ifname) {
+    stringstream ss;
+
+    ss << "brctl addif " << bridge << " " << ifname;
+    if (execute_command(ss)) {
+        cerr << "Could not add interface "
+             << ifname << " to bridge " << bridge
+             << endl;
+        return -1;
+    }
+
+    if (verbose > 1)
+        cout << "Added interface " << ifname
+             << " to bridge " << bridge
+             << endl;
 
     return 0;
 }
@@ -995,8 +1082,13 @@ IPoRINA::main_loop()
         pfd[0].events = pfd[1].events = POLLIN;
         ret = poll(pfd, sizeof(pfd) / sizeof(pfd[0]), -1);
         if (ret < 0) {
-            perror("poll(lfd)");
-            return -1;
+            if (errno == EINTR && cleanup_triggered) {
+                g->cleanup();
+                return 0;
+            } else {
+                perror("poll(lfd)");
+                return -1;
+            }
         } else if (ret == 0) {
             /* Timeout or spuriorus notification. */
             continue;
@@ -1073,7 +1165,7 @@ IPoRINA::main_loop()
             if (verbose) {
                 cout << "M_START(data) received from " << remote_name << endl;
             }
-            remotes[remote_name].rfd                          = cfd;
+            remotes[remote_name].rfd = cfd;
             remotes[remote_name].flow_alloc_needed[IPOR_DATA] = false;
             remotes[remote_name].mss_configure(use_tap);
             /* Submit the new fd mapping to a worker thread. */
@@ -1099,6 +1191,20 @@ IPoRINA::main_loop()
             if (r.tun_alloc(use_tap)) {
                 close(cfd);
                 goto abor;
+            }
+
+            /* Add the new tunnel to the bridge if needed. */
+            if (!bridge.empty()) {
+                if (verbose > 1)
+                    cout << "Adding interface " << r.tun_name
+                         << " to bridge " << bridge
+                         << endl;
+
+                if (add_if_bridge(r.tun_name)) {
+                    cerr << "Failed to add " << r.tun_name
+                         << " to bridge " << bridge
+                         << endl;
+                }
             }
         }
 
@@ -1318,6 +1424,11 @@ IPoRINA::connect_to_remotes()
     }
 }
 
+void cleanup(int s) {
+    cerr << "Got Ctrl+C, preparing for cleanup..." << endl;
+    g->cleanup_triggered = true;
+}
+
 /* Turn this program into a daemon process. */
 static void
 daemonize(void)
@@ -1367,7 +1478,6 @@ main(int argc, char **argv)
     const char *confpath = "/etc/rina/iporinad.conf";
     int background = 0;
     int opt;
-    std::thread fa_th;
 
     while ((opt = getopt(argc, argv, "hc:vL:E:t:wT")) != -1) {
         switch (opt) {
@@ -1431,6 +1541,10 @@ main(int argc, char **argv)
         cerr << "'ethtool' command not available, please install it" << endl;
         return -1;
     }
+    if (execute_command("which brctl")) {
+        cerr << "'brctl' command not available, please install it" << endl;
+        return -1;
+    }
 
     /* Parse configuration file. */
     if (g->parse_conf(confpath))
@@ -1446,13 +1560,15 @@ main(int argc, char **argv)
     if (background)
         daemonize();
 
+    signal(SIGINT, &cleanup);
+    signal(SIGTERM, &cleanup);
+
     /* Start the threads that will carry out the forwarding work. */
     g->start_workers();
 
     /* Start the auto-connect thread if there is any configured
        remotes */
-    if (g->nb_configured_remotes > 0)
-        fa_th = std::thread(&IPoRINA::connect_to_remotes, g);
+    unique_ptr<std::thread> fa_th(g->start_connect_thread());
 
-    return g->main_loop();
+    exit(g->main_loop());
 }
