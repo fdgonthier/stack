@@ -742,18 +742,6 @@ Remote::ip_configure() const
                 return -1;
             }
         }
-
-        // if (!tun_cfg.empty() && !tun_cfg.issubnet()) {
-        //     stringstream cmdss;
-
-        //     cmdss << "ip route add " << tun_cfg.tosubnet().repr << " dev " << tun_name;
-        //     if (execute_command(cmdss)) {
-        //         cerr << "Failed to add local route to interface " << tun_name
-        //              << " [cmd: " << cmdss.str() << "]"
-        //              << endl;
-        //         return -1;
-        //     }
-        // }
     }
 
     /* Setup the routes advertised by the remote peer. */
